@@ -6,7 +6,7 @@ import os
 import threading
 import time
 
-API_TOKEN = os.getenv("8626123750:AAGgJlSxNbGoL7_kagp32mjDtGkPxouXFGM")
+API_TOKEN = os.getenv("API_TOKEN")
 CHANNEL_USERNAME = "@name2character"  # change this
 
 bot = telebot.TeleBot(API_TOKEN)
