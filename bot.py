@@ -7,27 +7,20 @@ import threading
 import time
 from flask import Flask
 
-# 🔐 ENV VARIABLES
 API_TOKEN = os.getenv("API_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-print("TOKEN:", API_TOKEN)
-print("DB:", DATABASE_URL)
-
 bot = telebot.TeleBot(API_TOKEN)
-
-# 🌐 Flask app (for Render)
 app = Flask(__name__)
 
 @app.route('/')
 def home():
     return "Bot is running!"
 
-# 🗄️ Database connection
+# DB
 conn = psycopg2.connect(DATABASE_URL)
 cursor = conn.cursor()
 
-# Create tables
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS giveaways (
     id SERIAL PRIMARY KEY,
@@ -50,23 +43,33 @@ CREATE TABLE IF NOT EXISTS participants (
 
 conn.commit()
 
-CHANNEL_USERNAME = "@your_channel"  # CHANGE THIS
+CHANNEL_USERNAME = "@name2character"  # change
 
-# ✅ START COMMAND (IMPORTANT)
+# 🔗 Generate message link
+def generate_link(chat_id, message_id):
+    try:
+        if str(chat_id).startswith("-100"):
+            chat_id = str(chat_id)[4:]
+            return f"https://t.me/c/{chat_id}/{message_id}"
+        else:
+            return None
+    except:
+        return None
+
+# START
 @bot.message_handler(commands=['start'])
 def start(message):
     bot.reply_to(message, "✅ Bot is working!\nUse /create <minutes> <winners>")
 
-# 🔹 Force join check
+# FORCE JOIN
 def is_joined(user_id):
     try:
         member = bot.get_chat_member(CHANNEL_USERNAME, user_id)
         return member.status in ["member", "administrator", "creator"]
-    except Exception as e:
-        print("JOIN CHECK ERROR:", e)
+    except:
         return False
 
-# 🔹 Auto end giveaways
+# AUTO END
 def auto_end():
     while True:
         try:
@@ -76,15 +79,13 @@ def auto_end():
 
             for g in expired:
                 end_giveaway(g[0])
-
-        except Exception as e:
-            print("AUTO END ERROR:", e)
-
+        except:
+            pass
         time.sleep(10)
 
 threading.Thread(target=auto_end, daemon=True).start()
 
-# 🔹 Create giveaway
+# CREATE
 @bot.message_handler(commands=['create'])
 def create(message):
     try:
@@ -94,8 +95,10 @@ def create(message):
 
         end_time = int(time.time()) + minutes * 60
 
-        msg = bot.send_message(message.chat.id,
-            f"🎉 Giveaway started!\n⏱ Ends in {minutes} min\n🏆 Winners: {winners}")
+        msg = bot.send_message(
+            message.chat.id,
+            f"🎉 Giveaway Started!\n⏱ {minutes} min\n🏆 Winners: {winners}"
+        )
 
         cursor.execute("""
         INSERT INTO giveaways (chat_id, message_id, creator_id, winners_count, end_time, active)
@@ -105,17 +108,24 @@ def create(message):
         giveaway_id = cursor.fetchone()[0]
         conn.commit()
 
+        # Buttons
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("🎟 Join", callback_data=f"join_{giveaway_id}"))
         markup.add(InlineKeyboardButton("📊 Participants", callback_data=f"count_{giveaway_id}"))
 
         bot.edit_message_reply_markup(message.chat.id, msg.message_id, reply_markup=markup)
 
+        # 🔗 Send share link
+        link = generate_link(message.chat.id, msg.message_id)
+
+        if link:
+            bot.send_message(message.chat.id, f"🔗 Share this giveaway:\n{link}")
+
     except Exception as e:
         print("CREATE ERROR:", e)
         bot.reply_to(message, "Usage: /create <minutes> <winners>")
 
-# 🔹 Join
+# JOIN
 @bot.callback_query_handler(func=lambda c: c.data.startswith("join_"))
 def join(call):
     try:
@@ -129,7 +139,7 @@ def join(call):
         result = cursor.fetchone()
 
         if not result or not result[0]:
-            bot.answer_callback_query(call.id, "❌ Giveaway ended!")
+            bot.answer_callback_query(call.id, "❌ Ended!")
             return
 
         user_id = call.from_user.id
@@ -149,7 +159,7 @@ def join(call):
     except Exception as e:
         print("JOIN ERROR:", e)
 
-# 🔹 Count
+# COUNT
 @bot.callback_query_handler(func=lambda c: c.data.startswith("count_"))
 def count(call):
     try:
@@ -160,7 +170,7 @@ def count(call):
     except Exception as e:
         print("COUNT ERROR:", e)
 
-# 🔹 End giveaway
+# END
 def end_giveaway(gid):
     try:
         cursor.execute("SELECT chat_id,winners_count FROM giveaways WHERE id=%s", (gid,))
@@ -188,7 +198,7 @@ def end_giveaway(gid):
     except Exception as e:
         print("END ERROR:", e)
 
-# 🔹 Admin
+# ADMIN
 @bot.message_handler(commands=['admin'])
 def admin(message):
     try:
@@ -207,11 +217,10 @@ def admin(message):
             f"👥 Total joins: {users}\n"
             f"🔥 Active: {active}"
         )
+    except:
+        pass
 
-    except Exception as e:
-        print("ADMIN ERROR:", e)
-
-# 🚀 Run bot + Flask together
+# RUN
 def run_bot():
     print("BOT STARTED 🔥")
     bot.infinity_polling(timeout=10, long_polling_timeout=5)
