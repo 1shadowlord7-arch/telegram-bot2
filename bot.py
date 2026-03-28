@@ -177,4 +177,21 @@ def admin(message):
     )
 
 
-bot.infinity_polling()
+import threading
+from flask import Flask
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+def run_bot():
+    bot.infinity_polling()
+
+def run_web():
+    app.run(host='0.0.0.0', port=10000)
+
+# Run both together
+threading.Thread(target=run_bot).start()
+threading.Thread(target=run_web).start()
