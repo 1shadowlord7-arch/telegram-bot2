@@ -5,14 +5,26 @@ import random
 import os
 import threading
 import time
+from flask import Flask
 
+# 🔐 ENV VARIABLES
 API_TOKEN = os.getenv("API_TOKEN")
-CHANNEL_USERNAME = "@name2character"  # change this
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+print("TOKEN:", API_TOKEN)
+print("DB:", DATABASE_URL)
 
 bot = telebot.TeleBot(API_TOKEN)
 
-# PostgreSQL connection
-conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+# 🌐 Flask app (for Render)
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+# 🗄️ Database connection
+conn = psycopg2.connect(DATABASE_URL)
 cursor = conn.cursor()
 
 # Create tables
@@ -38,31 +50,39 @@ CREATE TABLE IF NOT EXISTS participants (
 
 conn.commit()
 
+CHANNEL_USERNAME = "@your_channel"  # CHANGE THIS
 
-# 🔹 Check force join
+# ✅ START COMMAND (IMPORTANT)
+@bot.message_handler(commands=['start'])
+def start(message):
+    bot.reply_to(message, "✅ Bot is working!\nUse /create <minutes> <winners>")
+
+# 🔹 Force join check
 def is_joined(user_id):
     try:
         member = bot.get_chat_member(CHANNEL_USERNAME, user_id)
         return member.status in ["member", "administrator", "creator"]
-    except:
+    except Exception as e:
+        print("JOIN CHECK ERROR:", e)
         return False
 
-
-# 🔹 Auto end checker
+# 🔹 Auto end giveaways
 def auto_end():
     while True:
-        now = int(time.time())
+        try:
+            now = int(time.time())
+            cursor.execute("SELECT id FROM giveaways WHERE active=TRUE AND end_time<=%s", (now,))
+            expired = cursor.fetchall()
 
-        cursor.execute("SELECT id FROM giveaways WHERE active=TRUE AND end_time<=%s", (now,))
-        expired = cursor.fetchall()
+            for g in expired:
+                end_giveaway(g[0])
 
-        for g in expired:
-            end_giveaway(g[0])
+        except Exception as e:
+            print("AUTO END ERROR:", e)
 
         time.sleep(10)
 
 threading.Thread(target=auto_end, daemon=True).start()
-
 
 # 🔹 Create giveaway
 @bot.message_handler(commands=['create'])
@@ -74,7 +94,8 @@ def create(message):
 
         end_time = int(time.time()) + minutes * 60
 
-        msg = bot.send_message(message.chat.id, f"🎉 Giveaway started!\n⏱ Ends in {minutes} min\n🏆 Winners: {winners}")
+        msg = bot.send_message(message.chat.id,
+            f"🎉 Giveaway started!\n⏱ Ends in {minutes} min\n🏆 Winners: {winners}")
 
         cursor.execute("""
         INSERT INTO giveaways (chat_id, message_id, creator_id, winners_count, end_time, active)
@@ -90,108 +111,113 @@ def create(message):
 
         bot.edit_message_reply_markup(message.chat.id, msg.message_id, reply_markup=markup)
 
-    except:
+    except Exception as e:
+        print("CREATE ERROR:", e)
         bot.reply_to(message, "Usage: /create <minutes> <winners>")
-
 
 # 🔹 Join
 @bot.callback_query_handler(func=lambda c: c.data.startswith("join_"))
 def join(call):
-    giveaway_id = int(call.data.split("_")[1])
+    try:
+        giveaway_id = int(call.data.split("_")[1])
 
-    # Force join check
-    if not is_joined(call.from_user.id):
-        bot.answer_callback_query(call.id, "❌ Join channel first!")
-        return
+        if not is_joined(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ Join channel first!")
+            return
 
-    cursor.execute("SELECT active FROM giveaways WHERE id=%s", (giveaway_id,))
-    if not cursor.fetchone()[0]:
-        bot.answer_callback_query(call.id, "❌ Ended!")
-        return
+        cursor.execute("SELECT active FROM giveaways WHERE id=%s", (giveaway_id,))
+        result = cursor.fetchone()
 
-    user_id = call.from_user.id
-    username = call.from_user.username or call.from_user.first_name
+        if not result or not result[0]:
+            bot.answer_callback_query(call.id, "❌ Giveaway ended!")
+            return
 
-    cursor.execute("SELECT 1 FROM participants WHERE giveaway_id=%s AND user_id=%s",
-                   (giveaway_id, user_id))
+        user_id = call.from_user.id
+        username = call.from_user.username or call.from_user.first_name
 
-    if cursor.fetchone():
-        bot.answer_callback_query(call.id, "⚠️ Already joined!")
-    else:
-        cursor.execute("INSERT INTO participants VALUES (%s,%s,%s)",
-                       (giveaway_id, user_id, username))
-        conn.commit()
-        bot.answer_callback_query(call.id, "✅ Joined!")
+        cursor.execute("SELECT 1 FROM participants WHERE giveaway_id=%s AND user_id=%s",
+                       (giveaway_id, user_id))
 
+        if cursor.fetchone():
+            bot.answer_callback_query(call.id, "⚠️ Already joined!")
+        else:
+            cursor.execute("INSERT INTO participants VALUES (%s,%s,%s)",
+                           (giveaway_id, user_id, username))
+            conn.commit()
+            bot.answer_callback_query(call.id, "✅ Joined!")
+
+    except Exception as e:
+        print("JOIN ERROR:", e)
 
 # 🔹 Count
 @bot.callback_query_handler(func=lambda c: c.data.startswith("count_"))
 def count(call):
-    gid = int(call.data.split("_")[1])
-    cursor.execute("SELECT COUNT(*) FROM participants WHERE giveaway_id=%s", (gid,))
-    count = cursor.fetchone()[0]
-    bot.answer_callback_query(call.id, f"👥 {count} users")
+    try:
+        gid = int(call.data.split("_")[1])
+        cursor.execute("SELECT COUNT(*) FROM participants WHERE giveaway_id=%s", (gid,))
+        count = cursor.fetchone()[0]
+        bot.answer_callback_query(call.id, f"👥 {count} users")
+    except Exception as e:
+        print("COUNT ERROR:", e)
 
-
-# 🔹 End giveaway logic
+# 🔹 End giveaway
 def end_giveaway(gid):
-    cursor.execute("SELECT chat_id,winners_count FROM giveaways WHERE id=%s", (gid,))
-    data = cursor.fetchone()
-    if not data:
-        return
+    try:
+        cursor.execute("SELECT chat_id,winners_count FROM giveaways WHERE id=%s", (gid,))
+        data = cursor.fetchone()
 
-    chat_id, winners_count = data
+        if not data:
+            return
 
-    cursor.execute("SELECT username FROM participants WHERE giveaway_id=%s", (gid,))
-    users = [u[0] for u in cursor.fetchall()]
+        chat_id, winners_count = data
 
-    if not users:
-        bot.send_message(chat_id, "⚠️ No participants!")
-        return
+        cursor.execute("SELECT username FROM participants WHERE giveaway_id=%s", (gid,))
+        users = [u[0] for u in cursor.fetchall()]
 
-    winners = random.sample(users, min(len(users), winners_count))
+        if not users:
+            bot.send_message(chat_id, "⚠️ No participants!")
+            return
 
-    bot.send_message(chat_id, "🏆 Winners:\n" + "\n".join([f"@{w}" for w in winners]))
+        winners = random.sample(users, min(len(users), winners_count))
 
-    cursor.execute("UPDATE giveaways SET active=FALSE WHERE id=%s", (gid,))
-    conn.commit()
+        bot.send_message(chat_id, "🏆 Winners:\n" + "\n".join([f"@{w}" for w in winners]))
 
+        cursor.execute("UPDATE giveaways SET active=FALSE WHERE id=%s", (gid,))
+        conn.commit()
 
-# 🔹 Admin dashboard
+    except Exception as e:
+        print("END ERROR:", e)
+
+# 🔹 Admin
 @bot.message_handler(commands=['admin'])
 def admin(message):
-    cursor.execute("SELECT COUNT(*) FROM giveaways")
-    total = cursor.fetchone()[0]
+    try:
+        cursor.execute("SELECT COUNT(*) FROM giveaways")
+        total = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM participants")
-    users = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM participants")
+        users = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM giveaways WHERE active=TRUE")
-    active = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM giveaways WHERE active=TRUE")
+        active = cursor.fetchone()[0]
 
-    bot.reply_to(message,
-        f"📊 Dashboard\n\n"
-        f"🎁 Total giveaways: {total}\n"
-        f"👥 Total joins: {users}\n"
-        f"🔥 Active: {active}"
-    )
+        bot.reply_to(message,
+            f"📊 Dashboard\n\n"
+            f"🎁 Total giveaways: {total}\n"
+            f"👥 Total joins: {users}\n"
+            f"🔥 Active: {active}"
+        )
 
+    except Exception as e:
+        print("ADMIN ERROR:", e)
 
-import threading
-from flask import Flask
-
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "Bot is running!"
-
+# 🚀 Run bot + Flask together
 def run_bot():
-    bot.infinity_polling()
+    print("BOT STARTED 🔥")
+    bot.infinity_polling(timeout=10, long_polling_timeout=5)
 
 def run_web():
     app.run(host='0.0.0.0', port=10000)
 
-# Run both together
 threading.Thread(target=run_bot).start()
 threading.Thread(target=run_web).start()
