@@ -10,6 +10,9 @@ from flask import Flask
 API_TOKEN = os.getenv("API_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+BOT_USERNAME = "@CreatorSuiteBot"  # CHANGE THIS
+CHANNEL_USERNAME = "@name2character"  # CHANGE THIS
+
 bot = telebot.TeleBot(API_TOKEN)
 app = Flask(__name__)
 
@@ -43,19 +46,6 @@ CREATE TABLE IF NOT EXISTS participants (
 
 conn.commit()
 
-CHANNEL_USERNAME = "@name2character"  # CHANGE
-
-# 🔗 LINK
-def get_link(chat_id, message_id):
-    if str(chat_id).startswith("-100"):
-        return f"https://t.me/c/{str(chat_id)[4:]}/{message_id}"
-    return None
-
-# ✅ START
-@bot.message_handler(commands=['start'])
-def start(msg):
-    bot.reply_to(msg, "✅ Bot ready\nUse /create <minutes> <winners>")
-
 # 🔐 FORCE JOIN
 def is_joined(user_id):
     try:
@@ -64,7 +54,7 @@ def is_joined(user_id):
     except:
         return False
 
-# 🔄 AUTO END (FIXED NO SPAM)
+# 🔄 AUTO END
 def auto_end():
     while True:
         try:
@@ -74,14 +64,11 @@ def auto_end():
 
             for r in rows:
                 gid = r[0]
-
                 cursor.execute("UPDATE giveaways SET active=FALSE WHERE id=%s", (gid,))
                 conn.commit()
-
                 pick_winner(gid)
-
-        except Exception as e:
-            print("AUTO ERROR:", e)
+        except:
+            pass
 
         time.sleep(10)
 
@@ -97,9 +84,7 @@ def create(msg):
 
         end_time = int(time.time()) + minutes * 60
 
-        text = f"🎉 Giveaway Started!\n⏱ {minutes} min\n🏆 Winners: {winners}"
-
-        sent = bot.send_message(msg.chat.id, text)
+        sent = bot.send_message(msg.chat.id, "🎉 Giveaway Started!")
 
         cursor.execute("""
         INSERT INTO giveaways (chat_id,message_id,creator_id,winners_count,end_time,active)
@@ -110,69 +95,61 @@ def create(msg):
         conn.commit()
 
         markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("🎟 Join Giveaway", callback_data=f"join_{gid}"))
-        markup.add(InlineKeyboardButton("📊 Participants", callback_data=f"count_{gid}"))
-        markup.add(InlineKeyboardButton("🎯 Pick Winner", callback_data=f"pick_{gid}"))
+        markup.add(InlineKeyboardButton("🎟 Join Giveaway", url=f"https://t.me/{BOT_USERNAME}?start=giveaway_{gid}"))
 
-        bot.edit_message_reply_markup(msg.chat.id, sent.message_id, reply_markup=markup)
+        bot.edit_message_text(
+            f"🎉 Giveaway Started!\n\n⏱ {minutes} min\n🏆 Winners: {winners}",
+            msg.chat.id,
+            sent.message_id,
+            reply_markup=markup
+        )
 
-        # 🔗 SHARE LINK
-        link = get_link(msg.chat.id, sent.message_id)
-        if link:
-            bot.send_message(msg.chat.id, f"🔗 Share this giveaway:\n{link}")
+        # 🔗 SHARE LINK (IMPORTANT)
+        deep_link = f"https://t.me/{BOT_USERNAME}?start=giveaway_{gid}"
+        bot.send_message(msg.chat.id, f"🔗 Share this link:\n{deep_link}")
 
     except:
         bot.reply_to(msg, "Usage: /create <minutes> <winners>")
 
-# 🎟 JOIN (FIXED BUTTON FLOW)
-@bot.callback_query_handler(func=lambda c: c.data.startswith("join_"))
-def join(call):
-    gid = int(call.data.split("_")[1])
+# 🚀 START HANDLER (DEEP LINK ENTRY)
+@bot.message_handler(commands=['start'])
+def start(msg):
+    args = msg.text.split()
 
-    if not is_joined(call.from_user.id):
-        markup = InlineKeyboardMarkup()
-        markup.add(
-            InlineKeyboardButton("🔗 Join Channel", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}"),
-            InlineKeyboardButton("✅ I Joined", callback_data=f"recheck_{gid}")
-        )
+    if len(args) > 1 and args[1].startswith("giveaway_"):
+        gid = int(args[1].split("_")[1])
 
-        bot.send_message(call.message.chat.id,
-                         "⚠️ Join channel first to participate",
-                         reply_markup=markup)
-        return
+        if not is_joined(msg.from_user.id):
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("🔗 Join Channel", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}"))
+            bot.send_message(msg.chat.id, "Join channel first!", reply_markup=markup)
+            return
 
-    cursor.execute("SELECT active FROM giveaways WHERE id=%s", (gid,))
-    res = cursor.fetchone()
+        user = msg.from_user.id
+        name = msg.from_user.username or msg.from_user.first_name
 
-    if not res or not res[0]:
-        bot.answer_callback_query(call.id, "❌ Giveaway ended")
-        return
+        cursor.execute("SELECT active FROM giveaways WHERE id=%s",(gid,))
+        res = cursor.fetchone()
 
-    user = call.from_user.id
-    name = call.from_user.username or call.from_user.first_name
+        if not res or not res[0]:
+            bot.send_message(msg.chat.id, "❌ Giveaway ended")
+            return
 
-    cursor.execute("SELECT 1 FROM participants WHERE giveaway_id=%s AND user_id=%s",(gid,user))
+        cursor.execute("SELECT 1 FROM participants WHERE giveaway_id=%s AND user_id=%s",(gid,user))
 
-    if cursor.fetchone():
-        bot.answer_callback_query(call.id, "⚠️ Already joined")
+        if cursor.fetchone():
+            bot.send_message(msg.chat.id, "⚠️ Already joined")
+        else:
+            cursor.execute("INSERT INTO participants VALUES (%s,%s,%s)",(gid,user,name))
+            conn.commit()
+            bot.send_message(msg.chat.id, "✅ You joined the giveaway!")
+
     else:
-        cursor.execute("INSERT INTO participants VALUES (%s,%s,%s)",(gid,user,name))
-        conn.commit()
-        bot.answer_callback_query(call.id, "✅ Joined!")
+        bot.send_message(msg.chat.id, "Welcome!\nUse giveaway links to participate.")
 
-# 🔁 RECHECK
-@bot.callback_query_handler(func=lambda c: c.data.startswith("recheck_"))
-def recheck(call):
-    gid = int(call.data.split("_")[1])
-
-    if is_joined(call.from_user.id):
-        bot.answer_callback_query(call.id, "✅ Verified! Click join again")
-    else:
-        bot.answer_callback_query(call.id, "❌ Still not joined")
-
-# 📊 COUNT (CREATOR ONLY)
-@bot.callback_query_handler(func=lambda c: c.data.startswith("count_"))
-def count(call):
+# 🎯 PICK (CREATOR ONLY)
+@bot.callback_query_handler(func=lambda c: c.data.startswith("pick_"))
+def pick(call):
     gid = int(call.data.split("_")[1])
 
     cursor.execute("SELECT creator_id FROM giveaways WHERE id=%s",(gid,))
@@ -182,38 +159,12 @@ def count(call):
         bot.answer_callback_query(call.id, "❌ Only creator")
         return
 
-    cursor.execute("SELECT COUNT(*) FROM participants WHERE giveaway_id=%s",(gid,))
-    total = cursor.fetchone()[0]
-
-    bot.answer_callback_query(call.id, f"👥 {total} users")
-
-# 🎯 PICK
-@bot.callback_query_handler(func=lambda c: c.data.startswith("pick_"))
-def pick(call):
-    gid = int(call.data.split("_")[1])
-
-    cursor.execute("SELECT creator_id,active FROM giveaways WHERE id=%s",(gid,))
-    data = cursor.fetchone()
-
-    if not data:
-        return
-
-    creator, active = data
-
-    if call.from_user.id != creator:
-        bot.answer_callback_query(call.id, "❌ Only creator")
-        return
-
-    if not active:
-        bot.answer_callback_query(call.id, "Already ended")
-        return
-
     cursor.execute("UPDATE giveaways SET active=FALSE WHERE id=%s",(gid,))
     conn.commit()
 
     pick_winner(gid)
 
-# 🏆 WINNER (NO SPAM)
+# 🏆 WINNER
 def pick_winner(gid):
     cursor.execute("SELECT chat_id,winners_count FROM giveaways WHERE id=%s",(gid,))
     data = cursor.fetchone()
@@ -227,7 +178,7 @@ def pick_winner(gid):
     users = [u[0] for u in cursor.fetchall()]
 
     if not users:
-        bot.send_message(chat_id, "⚠️ No participants joined.")
+        bot.send_message(chat_id, "⚠️ No participants")
         return
 
     winners = random.sample(users, min(len(users), winners_count))
@@ -238,8 +189,7 @@ def pick_winner(gid):
 
 # 🚀 RUN
 def run_bot():
-    print("BOT STARTED")
-    bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    bot.infinity_polling()
 
 def run_web():
     app.run(host='0.0.0.0', port=10000)
