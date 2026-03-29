@@ -10,7 +10,7 @@ from flask import Flask
 API_TOKEN = os.getenv("API_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-BOT_USERNAME = "CreatorSuiteBot"  # NO @
+BOT_USERNAME = "CreatorSuiteBot"
 CHANNEL_USERNAME = "@name2character"
 
 bot = telebot.TeleBot(API_TOKEN)
@@ -62,10 +62,8 @@ def auto_end():
 
         for r in rows:
             gid = r[0]
-
             cursor.execute("UPDATE giveaways SET active=FALSE WHERE id=%s", (gid,))
             conn.commit()
-
             pick_winner(gid)
 
         time.sleep(10)
@@ -94,6 +92,10 @@ def create(msg):
 
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("🎟 Join Giveaway", url=deep_link))
+        markup.add(
+            InlineKeyboardButton("👥 Participants", callback_data=f"count_{gid}"),
+            InlineKeyboardButton("🎯 Pick Winner", callback_data=f"pick_{gid}")
+        )
 
         bot.send_message(
             msg.chat.id,
@@ -106,26 +108,24 @@ def create(msg):
     except:
         bot.reply_to(msg, "Usage: /create <minutes> <winners>")
 
-# 🚀 START (JOIN LOGIC)
+# 🚀 START MENU
 @bot.message_handler(commands=['start'])
 def start(msg):
     args = msg.text.split()
 
+    # Deep link join
     if len(args) > 1 and args[1].startswith("giveaway_"):
         gid = int(args[1].split("_")[1])
 
-        # 🔐 Force join
         if not is_joined(msg.from_user.id):
             markup = InlineKeyboardMarkup()
             markup.add(InlineKeyboardButton(
                 "🔗 Join Channel",
                 url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}"
             ))
-
             bot.send_message(msg.chat.id, "Join channel first", reply_markup=markup)
             return
 
-        # Check active
         cursor.execute("SELECT active FROM giveaways WHERE id=%s", (gid,))
         res = cursor.fetchone()
 
@@ -136,21 +136,69 @@ def start(msg):
         user = msg.from_user.id
         name = msg.from_user.username or msg.from_user.first_name
 
-        cursor.execute("SELECT 1 FROM participants WHERE giveaway_id=%s AND user_id=%s", (gid, user))
+        cursor.execute("SELECT 1 FROM participants WHERE giveaway_id=%s AND user_id=%s",(gid,user))
 
         if cursor.fetchone():
             bot.send_message(msg.chat.id, "⚠️ Already joined")
         else:
-            cursor.execute("INSERT INTO participants VALUES (%s,%s,%s)", (gid, user, name))
+            cursor.execute("INSERT INTO participants VALUES (%s,%s,%s)",(gid,user,name))
             conn.commit()
-            bot.send_message(msg.chat.id, "✅ You joined the giveaway!")
+            bot.send_message(msg.chat.id, "✅ Joined!")
 
     else:
-        bot.send_message(msg.chat.id, "Welcome! Use giveaway link to join.")
+        bot.send_message(
+            msg.chat.id,
+            "👋 Welcome!\n\n📌 Commands:\n"
+            "/create <minutes> <winners>\n"
+            "/help"
+        )
+
+# 📊 COUNT (CREATOR ONLY)
+@bot.callback_query_handler(func=lambda c: c.data.startswith("count_"))
+def count(call):
+    gid = int(call.data.split("_")[1])
+
+    cursor.execute("SELECT creator_id FROM giveaways WHERE id=%s", (gid,))
+    creator = cursor.fetchone()
+
+    if not creator or call.from_user.id != creator[0]:
+        bot.answer_callback_query(call.id, "❌ Only creator")
+        return
+
+    cursor.execute("SELECT COUNT(*) FROM participants WHERE giveaway_id=%s", (gid,))
+    total = cursor.fetchone()[0]
+
+    bot.answer_callback_query(call.id, f"👥 {total} users")
+
+# 🎯 PICK WINNER (CREATOR ANYTIME)
+@bot.callback_query_handler(func=lambda c: c.data.startswith("pick_"))
+def pick(call):
+    gid = int(call.data.split("_")[1])
+
+    cursor.execute("SELECT creator_id,active FROM giveaways WHERE id=%s",(gid,))
+    data = cursor.fetchone()
+
+    if not data:
+        return
+
+    creator, active = data
+
+    if call.from_user.id != creator:
+        bot.answer_callback_query(call.id, "❌ Only creator")
+        return
+
+    if not active:
+        bot.answer_callback_query(call.id, "Already ended")
+        return
+
+    cursor.execute("UPDATE giveaways SET active=FALSE WHERE id=%s",(gid,))
+    conn.commit()
+
+    pick_winner(gid)
 
 # 🏆 WINNER
 def pick_winner(gid):
-    cursor.execute("SELECT chat_id,winners_count FROM giveaways WHERE id=%s", (gid,))
+    cursor.execute("SELECT chat_id,winners_count FROM giveaways WHERE id=%s",(gid,))
     data = cursor.fetchone()
 
     if not data:
@@ -158,7 +206,7 @@ def pick_winner(gid):
 
     chat_id, winners_count = data
 
-    cursor.execute("SELECT username FROM participants WHERE giveaway_id=%s", (gid,))
+    cursor.execute("SELECT username FROM participants WHERE giveaway_id=%s",(gid,))
     users = [u[0] for u in cursor.fetchall()]
 
     if not users:
@@ -173,7 +221,6 @@ def pick_winner(gid):
 
 # 🚀 RUN
 def run_bot():
-    print("BOT STARTED")
     bot.infinity_polling()
 
 def run_web():
