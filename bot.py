@@ -94,27 +94,38 @@ def create(msg):
 
         deep_link = f"https://t.me/{BOT_USERNAME}?start=giveaway_{gid}"
 
+        # ✅ CLEAN SHAREABLE MESSAGE
         text = (
-            f"🎉 GIVEAWAY 🎉\n\n"
-            f"⏱ {minutes} minutes\n"
+            f"🎉 Giveaway Started!\n\n"
+            f"⏱ {minutes} min\n"
             f"🏆 Winners: {winners}\n\n"
-            f"Click below 👇"
+            f"Click below to join 👇"
         )
 
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("🎟 Join Giveaway", url=deep_link))
-        markup.add(
+
+        # 🔥 THIS MESSAGE CAN BE SHARED ANYWHERE
+        sent = bot.send_message(msg.chat.id, text, reply_markup=markup)
+
+        # Creator controls (separate message → hidden from others)
+        control_markup = InlineKeyboardMarkup()
+        control_markup.add(
             InlineKeyboardButton("👥 Participants", callback_data=f"count_{gid}"),
             InlineKeyboardButton("🎯 Draw", callback_data=f"draw_{gid}")
         )
-        markup.add(InlineKeyboardButton("✅ Finalize", callback_data=f"final_{gid}"))
+        control_markup.add(InlineKeyboardButton("✅ Finalize", callback_data=f"final_{gid}"))
 
-        sent = bot.send_message(msg.chat.id, text, reply_markup=markup)
+        bot.send_message(
+            msg.chat.id,
+            "⚙️ Creator Controls",
+            reply_markup=control_markup
+        )
 
         cursor.execute("UPDATE giveaways SET message_id=%s WHERE id=%s", (sent.message_id, gid))
         conn.commit()
 
-        bot.send_message(msg.chat.id, f"🔗 Share this link:\n{deep_link}")
+        bot.send_message(msg.chat.id, f"🔗 Share this link anywhere:\n{deep_link}")
 
     except Exception as e:
         print(e)
@@ -228,8 +239,8 @@ def finalize_winner(gid):
 
     chat_id, winners_count, message_id = data
 
-    cursor.execute("SELECT username FROM participants WHERE giveaway_id=%s",(gid,))
-    users = [u[0] for u in cursor.fetchall()]
+    cursor.execute("SELECT username,user_id FROM participants WHERE giveaway_id=%s",(gid,))
+    users = cursor.fetchall()
 
     if not users:
         bot.send_message(chat_id, "⚠️ No participants")
@@ -237,10 +248,26 @@ def finalize_winner(gid):
 
     winners = random.sample(users, min(len(users), winners_count))
 
+    winner_usernames = [f"@{u[0]}" for u in winners]
+
+    # delete giveaway message
     try:
         bot.delete_message(chat_id, message_id)
     except:
         pass
+
+    # ✅ announce publicly
+    bot.send_message(
+        chat_id,
+        "🏆 FINAL WINNERS 🎉\n\n" + "\n".join(winner_usernames)
+    )
+
+    # 🔥 OPTIONAL: notify winners personally
+    for username, user_id in winners:
+        try:
+            bot.send_message(user_id, "🎉 You won the giveaway!")
+        except:
+            pass
 
     bot.send_message(chat_id,
         "🏆 FINAL WINNERS:\n" + "\n".join([f"@{w}" for w in winners])
