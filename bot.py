@@ -28,6 +28,7 @@ cursor.execute("""
 CREATE TABLE IF NOT EXISTS giveaways (
     id SERIAL PRIMARY KEY,
     chat_id BIGINT,
+    message_id BIGINT,
     creator_id BIGINT,
     winners_count INT,
     end_time BIGINT,
@@ -42,6 +43,9 @@ CREATE TABLE IF NOT EXISTS participants (
     username TEXT
 )
 """)
+
+# ensure column exists (no manual SQL needed)
+cursor.execute("ALTER TABLE giveaways ADD COLUMN IF NOT EXISTS message_id BIGINT;")
 
 conn.commit()
 
@@ -64,7 +68,7 @@ def auto_end():
             gid = r[0]
             cursor.execute("UPDATE giveaways SET active=FALSE WHERE id=%s", (gid,))
             conn.commit()
-            pick_winner(gid)
+            finalize_winner(gid)
 
         time.sleep(10)
 
@@ -90,30 +94,37 @@ def create(msg):
 
         deep_link = f"https://t.me/{BOT_USERNAME}?start=giveaway_{gid}"
 
+        text = (
+            f"🎉 GIVEAWAY 🎉\n\n"
+            f"⏱ {minutes} minutes\n"
+            f"🏆 Winners: {winners}\n\n"
+            f"Click below 👇"
+        )
+
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("🎟 Join Giveaway", url=deep_link))
         markup.add(
             InlineKeyboardButton("👥 Participants", callback_data=f"count_{gid}"),
-            InlineKeyboardButton("🎯 Pick Winner", callback_data=f"pick_{gid}")
+            InlineKeyboardButton("🎯 Draw", callback_data=f"draw_{gid}")
         )
+        markup.add(InlineKeyboardButton("✅ Finalize", callback_data=f"final_{gid}"))
 
-        bot.send_message(
-            msg.chat.id,
-            f"🎉 Giveaway Started!\n⏱ {minutes} min\n🏆 Winners: {winners}",
-            reply_markup=markup
-        )
+        sent = bot.send_message(msg.chat.id, text, reply_markup=markup)
+
+        cursor.execute("UPDATE giveaways SET message_id=%s WHERE id=%s", (sent.message_id, gid))
+        conn.commit()
 
         bot.send_message(msg.chat.id, f"🔗 Share this link:\n{deep_link}")
 
-    except:
+    except Exception as e:
+        print(e)
         bot.reply_to(msg, "Usage: /create <minutes> <winners>")
 
-# 🚀 START MENU
+# 🚀 START
 @bot.message_handler(commands=['start'])
 def start(msg):
     args = msg.text.split()
 
-    # Deep link join
     if len(args) > 1 and args[1].startswith("giveaway_"):
         gid = int(args[1].split("_")[1])
 
@@ -148,63 +159,74 @@ def start(msg):
     else:
         bot.send_message(
             msg.chat.id,
-            "👋 Welcome!\n\n📌 Commands:\n"
-            "/create <minutes> <winners>\n"
-            "/help"
+            "👋 Welcome!\n\n📌 Commands:\n/create <minutes> <winners>"
         )
 
-# 📊 COUNT (CREATOR ONLY)
+# 📊 COUNT
 @bot.callback_query_handler(func=lambda c: c.data.startswith("count_"))
 def count(call):
     gid = int(call.data.split("_")[1])
 
-    cursor.execute("SELECT creator_id FROM giveaways WHERE id=%s", (gid,))
+    cursor.execute("SELECT creator_id FROM giveaways WHERE id=%s",(gid,))
     creator = cursor.fetchone()
 
     if not creator or call.from_user.id != creator[0]:
         bot.answer_callback_query(call.id, "❌ Only creator")
         return
 
-    cursor.execute("SELECT COUNT(*) FROM participants WHERE giveaway_id=%s", (gid,))
+    cursor.execute("SELECT COUNT(*) FROM participants WHERE giveaway_id=%s",(gid,))
     total = cursor.fetchone()[0]
 
     bot.answer_callback_query(call.id, f"👥 {total} users")
 
-# 🎯 PICK WINNER (CREATOR ANYTIME)
-@bot.callback_query_handler(func=lambda c: c.data.startswith("pick_"))
-def pick(call):
+# 🎯 DRAW
+@bot.callback_query_handler(func=lambda c: c.data.startswith("draw_"))
+def draw(call):
     gid = int(call.data.split("_")[1])
 
-    cursor.execute("SELECT creator_id,active FROM giveaways WHERE id=%s",(gid,))
-    data = cursor.fetchone()
+    cursor.execute("SELECT creator_id FROM giveaways WHERE id=%s",(gid,))
+    creator = cursor.fetchone()
 
-    if not data:
-        return
-
-    creator, active = data
-
-    if call.from_user.id != creator:
+    if not creator or call.from_user.id != creator[0]:
         bot.answer_callback_query(call.id, "❌ Only creator")
         return
 
-    if not active:
-        bot.answer_callback_query(call.id, "Already ended")
+    cursor.execute("SELECT username FROM participants WHERE giveaway_id=%s",(gid,))
+    users = [u[0] for u in cursor.fetchall()]
+
+    if not users:
+        bot.answer_callback_query(call.id, "No participants")
+        return
+
+    winner = random.choice(users)
+    bot.send_message(call.message.chat.id, f"🎯 Draw result: @{winner}")
+
+# ✅ FINALIZE
+@bot.callback_query_handler(func=lambda c: c.data.startswith("final_"))
+def finalize(call):
+    gid = int(call.data.split("_")[1])
+
+    cursor.execute("SELECT creator_id FROM giveaways WHERE id=%s",(gid,))
+    creator = cursor.fetchone()
+
+    if not creator or call.from_user.id != creator[0]:
+        bot.answer_callback_query(call.id, "❌ Only creator")
         return
 
     cursor.execute("UPDATE giveaways SET active=FALSE WHERE id=%s",(gid,))
     conn.commit()
 
-    pick_winner(gid)
+    finalize_winner(gid)
 
-# 🏆 WINNER
-def pick_winner(gid):
-    cursor.execute("SELECT chat_id,winners_count FROM giveaways WHERE id=%s",(gid,))
+# 🏆 FINAL LOGIC
+def finalize_winner(gid):
+    cursor.execute("SELECT chat_id,winners_count,message_id FROM giveaways WHERE id=%s",(gid,))
     data = cursor.fetchone()
 
     if not data:
         return
 
-    chat_id, winners_count = data
+    chat_id, winners_count, message_id = data
 
     cursor.execute("SELECT username FROM participants WHERE giveaway_id=%s",(gid,))
     users = [u[0] for u in cursor.fetchall()]
@@ -215,8 +237,13 @@ def pick_winner(gid):
 
     winners = random.sample(users, min(len(users), winners_count))
 
+    try:
+        bot.delete_message(chat_id, message_id)
+    except:
+        pass
+
     bot.send_message(chat_id,
-        "🏆 Winners:\n" + "\n".join([f"@{w}" for w in winners])
+        "🏆 FINAL WINNERS:\n" + "\n".join([f"@{w}" for w in winners])
     )
 
 # 🚀 RUN
