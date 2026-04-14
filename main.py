@@ -11,6 +11,9 @@ from pymongo import MongoClient
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+# Make asyncio behavior explicit for the runtime
+asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+
 # ---------------------------
 # ENV HELPERS
 # ---------------------------
@@ -35,8 +38,9 @@ ADMIN_ID = int(must_env("ADMIN_ID"))
 
 DB_NAME = optional_env("DB_NAME", "renamer_bot")
 WEB_URL = optional_env("WEB_URL", "").rstrip("/")
-DASHBOARD_KEY = optional_env("DASHBOARD_KEY", "aryan_admin17")
+DASHBOARD_KEY = optional_env("DASHBOARD_KEY", "")
 STARTING_COINS = int(optional_env("STARTING_COINS", "1"))
+PORT = int(os.getenv("PORT", "10000"))
 
 # ---------------------------
 # MONGODB
@@ -64,9 +68,6 @@ web = Flask(__name__)
 @web.route("/")
 def home():
     return "Bot is alive."
-
-def run_web():
-    web.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")), use_reloader=False)
 
 @web.route("/dashboard")
 def dashboard():
@@ -104,15 +105,27 @@ def dashboard():
         "<!doctype html>"
         "<html><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-        "<title>Bot Dashboard</title></head><body>"
-        "<h1>📊 Bot Dashboard</h1>"
+        "<title>Bot Dashboard</title>"
+        "<style>"
+        "body{font-family:Arial,sans-serif;background:#111;color:#fff;margin:0;padding:20px}"
+        ".card{background:#1b1b1b;border:1px solid #2a2a2a;border-radius:14px;padding:16px;margin-bottom:14px}"
+        "table{width:100%;border-collapse:collapse;overflow:hidden;border-radius:12px;background:#1b1b1b}"
+        "th,td{border:1px solid #2a2a2a;padding:10px;text-align:left}"
+        "th{background:#222}"
+        "</style>"
+        "</head><body>"
+        "<div class='card'><h1>📊 Bot Dashboard</h1></div>"
+        "<div class='card'>"
         f"<p><b>Users:</b> {total_users}<br>"
         f"<b>Queued files:</b> {total_queue}<br>"
         f"<b>Total coins:</b> {total_coins}</p>"
-        "<table border='1' cellpadding='8' cellspacing='0'>"
+        "</div>"
+        "<div class='card'>"
+        "<table>"
         "<tr><th>User ID</th><th>Name</th><th>Coins</th><th>Files Used</th><th>Queued</th></tr>"
         f"{rows}"
         "</table>"
+        "</div>"
         "</body></html>"
     )
 
@@ -120,6 +133,9 @@ def dashboard_url() -> str | None:
     if WEB_URL and DASHBOARD_KEY:
         return f"{WEB_URL}/dashboard?key={DASHBOARD_KEY}"
     return None
+
+def run_web():
+    web.run(host="0.0.0.0", port=PORT, use_reloader=False)
 
 # ---------------------------
 # HELPERS
@@ -299,7 +315,7 @@ async def process(_, message):
 
     processed = 0
 
-    for index, item in enumerate(queued_files, start=1):
+    for item in queued_files:
         downloaded_path = None
         original_name = item["file_name"]
         base, ext = os.path.splitext(original_name)
@@ -356,9 +372,7 @@ async def process(_, message):
             upsert=True,
         )
 
-    await status.edit_text(
-        f"✅ Done!\n\nProcessed: {processed}/{total}"
-    )
+    await status.edit_text(f"✅ Done!\n\nProcessed: {processed}/{total}")
 
 @bot.on_message(filters.command("stats"))
 async def stats(_, message):
@@ -410,11 +424,9 @@ async def addcoins(_, message):
 # MAIN
 # ---------------------------
 async def main():
+    Thread(target=run_web, daemon=True).start()
     await bot.start()
     print("Bot Started ✅")
-
-    Thread(target=run_web, daemon=True).start()
-
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
