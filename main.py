@@ -11,7 +11,7 @@ from pymongo import MongoClient
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-# Make asyncio behavior explicit for the runtime
+# Force a stable asyncio policy
 asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
 
 # ---------------------------
@@ -38,7 +38,7 @@ ADMIN_ID = int(must_env("ADMIN_ID"))
 
 DB_NAME = optional_env("DB_NAME", "renamer_bot")
 WEB_URL = optional_env("WEB_URL", "").rstrip("/")
-DASHBOARD_KEY = optional_env("DASHBOARD_KEY", "aryan_admin17")
+DASHBOARD_KEY = must_env("DASHBOARD_KEY")
 STARTING_COINS = int(optional_env("STARTING_COINS", "1"))
 PORT = int(os.getenv("PORT", "10000"))
 
@@ -71,7 +71,7 @@ def home():
 
 @web.route("/dashboard")
 def dashboard():
-    if not DASHBOARD_KEY or request.args.get("key") != DASHBOARD_KEY:
+    if request.args.get("key") != DASHBOARD_KEY:
         return "Forbidden", 403
 
     total_users = users_col.count_documents({})
@@ -130,7 +130,7 @@ def dashboard():
     )
 
 def dashboard_url() -> str | None:
-    if WEB_URL and DASHBOARD_KEY:
+    if WEB_URL:
         return f"{WEB_URL}/dashboard?key={DASHBOARD_KEY}"
     return None
 
@@ -309,9 +309,7 @@ async def process(_, message):
 
     os.makedirs("downloads", exist_ok=True)
 
-    status = await message.reply_text(
-        f"⚡ Starting...\n\n{progress_bar(0, total)}"
-    )
+    status = await message.reply_text(f"⚡ Starting...\n\n{progress_bar(0, total)}")
 
     processed = 0
 
@@ -328,10 +326,7 @@ async def process(_, message):
         temp_path = os.path.join("downloads", temp_name)
 
         try:
-            downloaded_path = await bot.download_media(
-                item["file_id"],
-                file_name=temp_path
-            )
+            downloaded_path = await bot.download_media(item["file_id"], file_name=temp_path)
 
             sent = await bot.send_document(
                 CHANNEL_ID,
@@ -342,10 +337,7 @@ async def process(_, message):
             link = f"https://t.me/c/{str(CHANNEL_ID)[4:]}/{sent.id}"
 
             processed += 1
-
-            await status.edit_text(
-                f"📊 Processing {processed}/{total}\n\n{progress_bar(processed, total)}"
-            )
+            await status.edit_text(f"📊 Processing {processed}/{total}\n\n{progress_bar(processed, total)}")
 
             await message.reply_text(
                 f"✅ {os.path.basename(downloaded_path)}\n"
@@ -361,9 +353,7 @@ async def process(_, message):
             if downloaded_path and os.path.exists(downloaded_path):
                 os.remove(downloaded_path)
 
-            await message.reply_text(
-                f"❌ Failed for:\n{original_name}\n\n{e}"
-            )
+            await message.reply_text(f"❌ Failed for:\n{original_name}\n\n{e}")
 
     if processed:
         users_col.update_one(
