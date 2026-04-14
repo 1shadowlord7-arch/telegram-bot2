@@ -1,25 +1,18 @@
 import asyncio
-
-try:
-    asyncio.get_running_loop()
-except RuntimeError:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-
 import html
 import os
 import re
 import uuid
+import urllib.request
 from datetime import datetime
 from threading import Thread
 
 from flask import Flask, request
 from pymongo import MongoClient
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-# Force a stable asyncio policy
+# Force a stable asyncio policy for Render
 asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
 
 # ---------------------------
@@ -79,7 +72,7 @@ def home():
 
 @web.route("/dashboard")
 def dashboard():
-    if request.args.get("key") != DASHBOARD_KEY:
+    if DASHBOARD_KEY and request.args.get("key") != DASHBOARD_KEY:
         return "Forbidden", 403
 
     total_users = users_col.count_documents({})
@@ -138,12 +131,21 @@ def dashboard():
     )
 
 def dashboard_url() -> str | None:
-    if WEB_URL:
+    if WEB_URL and DASHBOARD_KEY:
         return f"{WEB_URL}/dashboard?key={DASHBOARD_KEY}"
     return None
 
 def run_web():
     web.run(host="0.0.0.0", port=PORT, use_reloader=False)
+
+def delete_webhook():
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
+    try:
+        with urllib.request.urlopen(url, timeout=15) as resp:
+            resp.read()
+        print("Webhook cleared ✅")
+    except Exception as e:
+        print(f"Webhook clear failed: {e}")
 
 # ---------------------------
 # HELPERS
@@ -317,7 +319,9 @@ async def process(_, message):
 
     os.makedirs("downloads", exist_ok=True)
 
-    status = await message.reply_text(f"⚡ Starting...\n\n{progress_bar(0, total)}")
+    status = await message.reply_text(
+        f"⚡ Starting...\n\n{progress_bar(0, total)}"
+    )
 
     processed = 0
 
@@ -345,7 +349,9 @@ async def process(_, message):
             link = f"https://t.me/c/{str(CHANNEL_ID)[4:]}/{sent.id}"
 
             processed += 1
-            await status.edit_text(f"📊 Processing {processed}/{total}\n\n{progress_bar(processed, total)}")
+            await status.edit_text(
+                f"📊 Processing {processed}/{total}\n\n{progress_bar(processed, total)}"
+            )
 
             await message.reply_text(
                 f"✅ {os.path.basename(downloaded_path)}\n"
@@ -361,7 +367,9 @@ async def process(_, message):
             if downloaded_path and os.path.exists(downloaded_path):
                 os.remove(downloaded_path)
 
-            await message.reply_text(f"❌ Failed for:\n{original_name}\n\n{e}")
+            await message.reply_text(
+                f"❌ Failed for:\n{original_name}\n\n{e}"
+            )
 
     if processed:
         users_col.update_one(
@@ -422,19 +430,11 @@ async def addcoins(_, message):
 # MAIN
 # ---------------------------
 async def main():
-    print("Starting bot...")
-
-    # start web FIRST
-    from threading import Thread
     Thread(target=run_web, daemon=True).start()
-
-    # then start bot
+    delete_webhook()
     await bot.start()
-
     print("Bot Started ✅")
-
-    # keep alive
-    await asyncio.Event().wait()
+    await idle()
 
 if __name__ == "__main__":
     asyncio.run(main())
