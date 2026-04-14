@@ -426,6 +426,10 @@ async def addcoins(_, message):
 
     await message.reply_text("✅ Coins updated.")
 
+@bot.on_message()
+async def debug(_, message):
+    print("RECEIVED:", message.text)
+
 # ---------------------------
 # MAIN
 # ---------------------------
