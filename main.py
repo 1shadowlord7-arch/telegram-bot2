@@ -1,4 +1,12 @@
 import asyncio
+
+try:
+    asyncio.get_running_loop()
+except RuntimeError:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+
 import html
 import os
 import re
@@ -414,9 +422,18 @@ async def addcoins(_, message):
 # MAIN
 # ---------------------------
 async def main():
+    print("Starting bot...")
+
+    # start web FIRST
+    from threading import Thread
     Thread(target=run_web, daemon=True).start()
+
+    # then start bot
     await bot.start()
+
     print("Bot Started ✅")
+
+    # keep alive
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
