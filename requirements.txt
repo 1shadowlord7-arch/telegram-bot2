@@ -1,4 +1,5 @@
 pyrogram==2.0.106
 tgcrypto
-flask
-nest_asyncio
+flask==3.0.3
+pymongo==4.10.1
+dnspython==2.6.1
