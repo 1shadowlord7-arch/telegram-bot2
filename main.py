@@ -38,7 +38,7 @@ ADMIN_ID = int(must_env("ADMIN_ID"))
 
 DB_NAME = optional_env("DB_NAME", "renamer_bot")
 WEB_URL = optional_env("WEB_URL", "").rstrip("/")
-DASHBOARD_KEY = must_env("DASHBOARD_KEY")
+DASHBOARD_KEY = optional_env("DASHBOARD_KEY", "")
 STARTING_COINS = int(optional_env("STARTING_COINS", "1"))
 PORT = int(os.getenv("PORT", "10000"))
 
